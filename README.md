@@ -90,7 +90,7 @@ A produção roda na VPS pelo Dokploy, num recurso do tipo **Docker Compose** qu
 - `nginx`: porta de entrada. É o único serviço na rede `dokploy-network`, por onde o Traefik do Dokploy entrega o domínio já com HTTPS. Não há porta publicada no host.
 - `web`: Gunicorn, apenas na rede interna do projeto, com o alias `fabrica-livros-web`. O nome `web` sozinho poderia coincidir com o de outro projeto.
 - `backup`: cópia diária do banco (ver abaixo).
-- `preparar-pastas`: roda a cada deploy e termina. Cria o arquivo do banco, se ainda não existir, e passa as pastas do host para o usuário do app (UID 10001).
+- `preparar-pastas`: roda a cada deploy e termina. Passa as pastas do host para o usuário do app (UID 10001); o próprio app cria o arquivo do banco ao iniciar.
 
 Cada serviço tem limite de memória, CPU e processos, ajustável pelas variáveis `*_MEMORIA` e `*_CPUS`, para não derrubar os outros projetos da VPS. Os containers rodam sem as capacidades de root que não usam e com `no-new-privileges`, e os logs giram em até 3 arquivos de 10 MB.
 

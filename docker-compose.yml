@@ -29,14 +29,15 @@ x-hardening: &hardening
 
 services:
   preparar-pastas:
-    # Roda a cada deploy, antes do app, e termina: cria o arquivo do banco se não existir e
-    # passa as pastas do host para o usuário do app (UID 10001, ver Dockerfile). Assim uma VPS
-    # nova (o Docker cria as pastas que faltam como root) e arquivos copiados com outro dono
-    # não precisam de chown manual.
+    # Roda a cada deploy, antes do app, e termina: passa as pastas do host para o usuário do
+    # app (UID 10001, ver Dockerfile). Assim uma VPS nova (o Docker cria as pastas que faltam
+    # como root) e um banco copiado com outro dono não precisam de chown manual. O arquivo do
+    # banco não é criado aqui: o app o cria ao iniciar. Sem DAC_OVERRIDE, nem o root pode
+    # gravar (touch) numa pasta ou arquivo de outro dono, só trocar o dono.
     <<: *hardening
     image: busybox:1.36
     restart: "no"
-    command: ["sh", "-c", "touch /data/livros.db && chown -R 10001:10001 /data /backups"]
+    command: ["chown", "-R", "10001:10001", "/data", "/backups"]
     volumes:
       - "${DATA_DIR:-/srv/fabrica-livros/data}:/data"
       - "${BACKUP_DIR:-/srv/fabrica-livros/backups}:/backups"
