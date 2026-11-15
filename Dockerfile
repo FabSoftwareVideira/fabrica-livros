@@ -8,15 +8,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# UID/GID fixos (10001): o serviço preparar-pastas do Compose passa as pastas do host
+# para este usuário a cada deploy, sem depender do nome existir fora da imagem.
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
-    && mkdir -p /data \
-    && groupadd --system app \
-    && useradd --system --gid app --home-dir /app app \
-    && chown app:app /data
+    && mkdir -p /data /backups \
+    && groupadd --system --gid 10001 app \
+    && useradd --system --uid 10001 --gid app --home-dir /app app \
+    && chown app:app /data /backups
 
 COPY --chown=app:app server.py .
 COPY --chown=app:app acervo ./acervo
+COPY --chown=app:app scripts ./scripts
 
 USER app
 

@@ -83,47 +83,43 @@ docker compose -f docker-compose.dev.yml run --rm web python server.py reset-dev
 
 O comando preserva as contas de servidores, apaga os registros estudantis do banco de desenvolvimento e recria os ciclos para o ano atual. Ele é bloqueado fora do serviço configurado com `APP_ENV=development`. Encerre com `Ctrl+C`; use `docker compose -f docker-compose.dev.yml down` para parar o serviço. Os dados dev ficam em `data-dev\livros.db` e continuam disponíveis depois de remover ou recriar o container.
 
-### Produção
+### Produção com Dokploy
 
-1. Copie `.env.example` para `.env` e defina `SECRET_KEY` com um valor aleatório exclusivo:
+A produção roda na VPS pelo Dokploy, num recurso do tipo **Docker Compose** que usa o `docker-compose.yml`:
 
-   ```powershell
-   Copy-Item .env.example .env
+- `nginx`: porta de entrada. É o único serviço na rede `dokploy-network`, por onde o Traefik do Dokploy entrega o domínio já com HTTPS. Não há porta publicada no host.
+- `web`: Gunicorn, apenas na rede interna do projeto, com o alias `fabrica-livros-web`. O nome `web` sozinho poderia coincidir com o de outro projeto.
+- `backup`: cópia diária do banco (ver abaixo).
+- `preparar-pastas`: roda a cada deploy e termina. Cria o arquivo do banco, se ainda não existir, e passa as pastas do host para o usuário do app (UID 10001).
+
+Cada serviço tem limite de memória, CPU e processos, ajustável pelas variáveis `*_MEMORIA` e `*_CPUS`, para não derrubar os outros projetos da VPS. Os containers rodam sem as capacidades de root que não usam e com `no-new-privileges`, e os logs giram em até 3 arquivos de 10 MB.
+
+**Configuração inicial no Dokploy**
+
+1. Crie um recurso **Docker Compose** apontando para este repositório, branch `main`, arquivo `docker-compose.yml`. Desligue o deploy automático do Dokploy: quem pede o deploy é o GitHub Actions, depois dos testes.
+2. Na aba **Environment**, preencha as variáveis do `.env.example`. A única obrigatória é `SECRET_KEY`:
+
+   ```bash
    python -c "import secrets; print(secrets.token_hex(32))"
    ```
 
-2. Grave o valor gerado em `SECRET_KEY` no `.env`. O Compose exige uma chave não vazia. Mantenha `COOKIE_SECURE=true` quando a aplicação estiver publicada por HTTPS.
-3. O banco é criado automaticamente em `data\livros.db` no primeiro início; não é necessário criar o arquivo manualmente. Se você já possui um banco antigo em `livros.db` na raiz do projeto, pare os containers e migre-o antes de iniciar a nova configuração:
+3. O banco fica em `DATA_DIR` e os backups diários em `BACKUP_DIR`, pastas fixas da VPS. Os padrões são `/srv/fabrica-livros/data` e `/srv/fabrica-livros/backups`. Elas precisam ficar fora do repositório, porque o Dokploy clona o código de novo a cada deploy. Se já existe um banco, copie-o para `DATA_DIR/livros.db` antes do primeiro deploy (ou aponte `DATA_DIR` para a pasta atual).
+4. Na aba **Domains**, adicione o domínio para o serviço `nginx`, porta `80`, com HTTPS. Mantenha `COOKIE_SECURE=true`.
+5. Faça o primeiro deploy e crie a conta inicial pelo terminal do container `web` no Dokploy:
 
-   ```powershell
-   New-Item -ItemType Directory -Force -Path .\data
-   Move-Item .\livros.db .\data\livros.db
+   ```bash
+   python server.py create-user
    ```
 
-   Se preferir manter uma cópia original, use `Copy-Item` em vez de `Move-Item`; confirme que o arquivo em `data\livros.db` contém os dados esperados antes de subir os containers.
-4. Inicie a aplicação:
+**Deploy automático (GitHub Actions)**
 
-   ```powershell
-   docker compose up --build -d
-   ```
+O workflow `.github/workflows/ci-cd.yml` roda em todo push e pull request: testes, auditoria das dependências (`pip-audit`), build da imagem e validação dos dois Compose. Em push na `main` com tudo aprovado, ele pede o deploy ao Dokploy pela API. Para isso, cadastre em **Settings → Secrets and variables → Actions**:
 
-5. Crie a conta inicial do servidor:
+- `DOKPLOY_URL`: endereço do painel, com `https://`.
+- `DOKPLOY_API_KEY`: token gerado no perfil do Dokploy (**Settings → Profile → API/CLI**).
+- `DOKPLOY_COMPOSE_ID`: id do recurso, que aparece na URL dele no painel.
 
-   ```powershell
-   docker compose run --rm web python server.py create-user
-   ```
-
-O Gunicorn escuta na porta 8000 somente na rede interna do Compose; a porta não é publicada no host. O Nginx encaminha as requisições para o serviço `web` e publica a porta local `127.0.0.1:8000` (configurável por `HOST_PORT`). O banco em `data\livros.db` é montado em `/data/livros.db` no container e espelhado no host. O Compose prepara automaticamente a pasta, o arquivo inicial e as permissões do banco. Para guardar o banco em outra pasta do host, defina `DATA_DIR` no `.env` (por exemplo, `/home/fabricio/dados/livros-didaticos`); isso é necessário no Dokploy, que clona o código de novo a cada deploy e apagaria a pasta `data` do projeto.
-
-### Cloudflare Tunnel com Nginx
-
-No painel do Cloudflare Zero Trust, configure a rota pública do túnel para o hostname desejado com serviço de origem `http://localhost:8000` (ou a porta definida em `HOST_PORT`). O TLS público termina no Cloudflare; o túnel conecta ao Nginx local por HTTP. Não configure o túnel para apontar diretamente à porta interna do Gunicorn. Se seu túnel já usava `localhost:8000`, essa origem continua igual: a porta agora pertence ao Nginx, não ao Gunicorn.
-
-Essa instrução presume que `cloudflared` está instalado no host que executa o Docker Compose. Se o `cloudflared` estiver em outro container, `localhost` apontará para esse container: conecte-o à mesma rede Docker e use `http://nginx:80` como origem, ou direcione-o ao endereço do host e à porta `HOST_PORT`. Mantenha a porta do Nginx vinculada a `127.0.0.1` quando o túnel estiver no host, para que não fique acessível diretamente pela rede.
-
-O arquivo `nginx/default.conf` configura o proxy e encaminha o host original, IPs e protocolo recebidos. O limite do corpo de requisição de 2 MB permite as assinaturas, respeitando o limite da aplicação. O Compose espera o Gunicorn ficar saudável antes de iniciar o Nginx.
-
-Os modos dev e production usam o mesmo arquivo `data\livros.db`; não execute os dois ao mesmo tempo nem use dados reais em desenvolvimento.
+Para reimplantar sem um novo commit, use **Run workflow** na aba Actions.
 
 Antes de cada avanço do ano letivo, a aplicação cria e valida uma cópia completa do banco SQLite antes de alterar os ciclos. O backup fica no diretório `data\backups` em produção (`data-dev\backups` no ambiente de desenvolvimento), dentro do volume persistente `/data`, e também é disponibilizado para download ao administrador após a migração. Em execução local, o diretório padrão é `backups`, ao lado do banco. Esses arquivos contêm dados pessoais, assinaturas e hashes de senha: restrinja o acesso, não os publique e mantenha cópias periódicas em outro local protegido.
 
@@ -131,19 +127,9 @@ Na aba **Administração → Backup**, o administrador pode criar um backup comp
 
 O servidor mantém no máximo os 5 backups mais recentes, contando os manuais, os do avanço do ano letivo e os de segurança da restauração. Ao criar um novo, os mais antigos são apagados automaticamente; guarde fora do servidor as cópias que precisar manter por mais tempo.
 
-Além desses, o serviço `backup` do Compose faz uma cópia diária do banco: uma ao subir e outra por dia às 03:00 de Brasília (`BACKUP_HOUR_UTC=6`). Ele usa a API de backup do SQLite, que gera uma cópia consistente sem parar o app, confere cada cópia com `PRAGMA integrity_check` e guarda o arquivo comprimido em `backups/livros-AAAA-MM-DD-HHMMSS.db.gz` (data em UTC), ou na pasta definida em `BACKUP_DIR`. Ficam as 14 mais recentes (`BACKUP_KEEP`). Essas cópias ficam fora de `data/backups`, então a limpeza do app não as apaga. Os arquivos são criados só com permissão do dono. Para restaurar, descompacte (`gunzip`) e envie o `.db` pela aba **Administração → Backup**. Para uma cópia na hora: `docker compose run --rm backup python /scripts/backup.py --once`.
-
-Para produzir uma cópia manual adicional do banco, pare o serviço, copie o arquivo no host e inicie-o novamente:
-
-```powershell
-docker compose stop nginx web
-Copy-Item .\data\livros.db .\livros-backup.db
-docker compose up -d
-```
+Além desses, o serviço `backup` do Compose faz uma cópia diária do banco: uma ao subir e outra por dia às 03:00 de Brasília (`BACKUP_HOUR_UTC=6`). Ele usa a API de backup do SQLite, que gera uma cópia consistente sem parar o app, confere cada cópia com `PRAGMA integrity_check` e guarda o arquivo comprimido em `BACKUP_DIR/livros-AAAA-MM-DD-HHMMSS.db.gz` (data em UTC). Ficam as 14 mais recentes (`BACKUP_KEEP`). Essas cópias ficam fora de `data/backups`, então a limpeza do app não as apaga. Os arquivos são criados só com permissão do dono. Para restaurar, descompacte (`gunzip`) e envie o `.db` pela aba **Administração → Backup**. Para uma cópia na hora, no terminal do container `backup` no Dokploy: `python scripts/backup.py --once`.
 
 Proteja os arquivos de backup e não os inclua no controle de versão. `.gitignore` exclui o banco, seus arquivos auxiliares SQLite e o `.env`.
-
-Para atualizar as imagens após mudanças, execute `docker compose up --build -d`. Para parar sem remover dados: `docker compose down`. O arquivo `data\livros.db` permanece no host independentemente do ciclo de vida dos containers.
 
 ## Fluxo
 

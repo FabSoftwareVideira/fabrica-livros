@@ -1,21 +1,62 @@
+# Produção no Dokploy (recurso do tipo "Docker Compose"): Gunicorn atrás do Nginx interno.
+#
+# - Sem porta publicada no host. O domínio e o HTTPS ficam com o Traefik do Dokploy,
+#   configurados na aba "Domains" do recurso para o serviço nginx, porta 80. Só o nginx
+#   entra na dokploy-network; o app e o backup ficam apenas na rede interna do projeto.
+# - Sem container_name: o Dokploy dá nomes próprios aos containers. Na rede interna, os
+#   serviços têm aliases com o prefixo do projeto ("web" sozinho pode coincidir com o de
+#   outro projeto).
+# - As variáveis vêm da aba "Environment" do Dokploy (modelo em .env.example).
+# - Banco e backups ficam em pastas fixas da VPS (DATA_DIR e BACKUP_DIR): o Dokploy clona o
+#   repositório de novo a cada deploy, e uma pasta relativa a ele seria perdida.
+# - Limites de hardware: cada serviço tem teto de memória e de CPU (ajustáveis pelas
+#   variáveis *_MEMORIA e *_CPUS), para que um não derrube os outros projetos da VPS. Passar
+#   do teto de memória reinicia só aquele container. O número de CPUs não pode passar do que
+#   a máquina tem (o Docker recusa).
+#
+# Para desenvolver na sua máquina, use docker-compose.dev.yml.
+
+# Sem ganhar privilégios depois de iniciar (setuid); logs do Docker giram em até 3 arquivos
+# de 10 MB (sem isso crescem até encher o disco)
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
 services:
-  database-init:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    user: "0:0"
-    entrypoint: ["/bin/sh", "-c"]
-    command: ["touch /data/livros.db && chown app:app /data /data/livros.db"]
-    volumes:
-      - ${DATA_DIR:-./data}:/data
+  preparar-pastas:
+    # Roda a cada deploy, antes do app, e termina: cria o arquivo do banco se não existir e
+    # passa as pastas do host para o usuário do app (UID 10001, ver Dockerfile). Assim uma VPS
+    # nova (o Docker cria as pastas que faltam como root) e arquivos copiados com outro dono
+    # não precisam de chown manual.
+    <<: *hardening
+    image: busybox:1.36
     restart: "no"
+    command: ["sh", "-c", "touch /data/livros.db && chown -R 10001:10001 /data /backups"]
+    volumes:
+      - "${DATA_DIR:-/srv/fabrica-livros/data}:/data"
+      - "${BACKUP_DIR:-/srv/fabrica-livros/backups}:/backups"
+    network_mode: none
+    # Só as capacidades de trocar o dono e de percorrer pastas de outro dono
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_READ_SEARCH
+
   web:
+    <<: *hardening
     build:
       context: .
       dockerfile: Dockerfile
+    image: fabrica-livros:latest
     restart: unless-stopped
     environment:
-      SECRET_KEY: ${SECRET_KEY:?Configure SECRET_KEY no arquivo .env}
+      SECRET_KEY: ${SECRET_KEY:?Configure SECRET_KEY na aba Environment do Dokploy}
       DATABASE_PATH: /data/livros.db
       PORT: "8000"
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
@@ -23,45 +64,117 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-}
-    depends_on:
-      database-init:
-        condition: service_completed_successfully
     volumes:
-      - ${DATA_DIR:-./data}:/data
+      - "${DATA_DIR:-/srv/fabrica-livros/data}:/data"
+    # Sem "ports" e fora da dokploy-network: só o nginx alcança o Gunicorn
+    expose:
+      - "8000"
+    networks:
+      default:
+        aliases:
+          - fabrica-livros-web
+    depends_on:
+      preparar-pastas:
+        condition: service_completed_successfully
+    # O healthcheck vem do Dockerfile (GET / pelo Python da imagem)
     init: true
-  # Backup diário do banco (cópia consistente do SQLite), em BACKUP_DIR (padrão ./backups,
-  # fora do git). Fica separado de data/backups, que o app limita aos 5 mais recentes.
+    cap_drop:
+      - ALL
+    # Gunicorn com 2 workers; a exportação dos termos do ano monta o ZIP de PDFs em memória
+    deploy:
+      resources:
+        limits:
+          memory: ${APP_MEMORIA:-768m}
+          cpus: "${APP_CPUS:-1.0}"
+          pids: 256
+        reservations:
+          memory: 128m
+
   backup:
-    image: python:3.12-slim
+    # Backup diário do banco (cópia consistente do SQLite), em BACKUP_DIR. Fica separado de
+    # data/backups, que o app limita aos 5 mais recentes. Usa a mesma imagem do app (o build
+    # repetido sai do cache; sem ele o Compose tentaria baixar a imagem de um registro).
+    <<: *hardening
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: fabrica-livros:latest
     restart: unless-stopped
-    command: ["python", "/scripts/backup.py"]
+    command: ["python", "scripts/backup.py"]
     environment:
       DATABASE_PATH: /data/livros.db
       BACKUP_DIR: /backups
       # Hora do backup em UTC: 6 = 03:00 de Brasília.
       BACKUP_HOUR_UTC: ${BACKUP_HOUR_UTC:-6}
       BACKUP_KEEP: ${BACKUP_KEEP:-14}
-    depends_on:
-      database-init:
-        condition: service_completed_successfully
     volumes:
-      - ${DATA_DIR:-./data}:/data:ro
-      - ${BACKUP_DIR:-./backups}:/backups
-      - ./scripts:/scripts:ro
-    init: true
-  nginx:
-    image: nginx:stable-alpine
-    restart: unless-stopped
+      - "${DATA_DIR:-/srv/fabrica-livros/data}:/data:ro"
+      - "${BACKUP_DIR:-/srv/fabrica-livros/backups}:/backups"
+    networks:
+      - default
     depends_on:
-      web:
-        condition: service_healthy
-    ports:
-      - "127.0.0.1:${HOST_PORT:-8000}:80"
+      preparar-pastas:
+        condition: service_completed_successfully
+    # Não serve HTTP: o healthcheck da imagem não se aplica
+    healthcheck:
+      disable: true
+    init: true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: ${BACKUP_MEMORIA:-256m}
+          cpus: "${BACKUP_CPUS:-0.25}"
+          pids: 64
+
+  nginx:
+    # Porta de entrada: o Traefik do Dokploy repassa o domínio para cá (porta 80, pela
+    # dokploy-network). Sem "ports" no host; o HTTPS é do Traefik.
+    <<: *hardening
+    image: nginx:1.28-alpine
+    restart: unless-stopped
+    expose:
+      - "80"
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      default:
+        aliases:
+          - fabrica-livros-nginx
+      dokploy-network:
+        aliases:
+          - fabrica-livros-nginx
+    depends_on:
+      # Só recebe tráfego depois que o app está de pé
+      web:
+        condition: service_healthy
+    # Pelo próprio nginx até o app: confere a porta de entrada e o repasse ao app de uma vez
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
       interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 10s
     init: true
+    # O processo principal roda como root para abrir a porta 80 e troca para o usuário nginx
+    # nos workers; fora isso, nenhuma capacidade de root
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - NET_BIND_SERVICE
+    # Só repassa requisições: bem menos que isto
+    deploy:
+      resources:
+        limits:
+          memory: ${NGINX_MEMORIA:-128m}
+          cpus: "${NGINX_CPUS:-0.5}"
+          pids: 128
+
+networks:
+  # Rede do Traefik do Dokploy (criada na instalação do Dokploy)
+  dokploy-network:
+    external: true

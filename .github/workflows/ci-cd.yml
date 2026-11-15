@@ -1,0 +1,71 @@
+# Testes em todo push/PR; a cada push na main que passe nos testes, pede ao Dokploy (pela API) o
+# deploy do recurso do acervo. O Dokploy baixa o código, reconstrói e sobe os containers no servidor
+# (ver "Produção com Dokploy" no README). O deploy automático do próprio Dokploy fica desligado, para
+# que só código testado vá para o ar.
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Botão "Run workflow" na aba Actions, para reimplantar sem novo commit
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  testes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"   # a mesma do Dockerfile
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      # Testes da aplicação (banco SQLite temporário, sem serviços externos)
+      - run: python -m unittest -v test_app
+
+      # Vulnerabilidades conhecidas nas dependências Python: falha aqui e o deploy não acontece
+      - name: Auditar dependências
+        run: pip install pip-audit && pip-audit -r requirements.txt
+
+      # Garante que a imagem de produção ainda constrói antes de chegar ao servidor
+      - run: docker build -t fabrica-livros:ci .
+
+      # E que os Compose de produção e de desenvolvimento continuam válidos
+      - run: docker compose -f docker-compose.yml config --quiet
+        env:
+          SECRET_KEY: ci
+      - run: docker compose -f docker-compose.dev.yml config --quiet
+
+  deploy:
+    needs: testes
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Um deploy por vez; um novo push espera o anterior terminar em vez de cancelá-lo no meio
+    concurrency:
+      group: deploy-producao
+      cancel-in-progress: false
+    steps:
+      # Em Settings > Secrets and variables > Actions: DOKPLOY_URL (endereço do painel, com https),
+      # DOKPLOY_API_KEY (gerada no perfil do Dokploy) e DOKPLOY_COMPOSE_ID (id do recurso, na URL dele).
+      - name: Pedir o deploy ao Dokploy
+        env:
+          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+          DOKPLOY_COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
+        run: |
+          for v in DOKPLOY_URL DOKPLOY_API_KEY DOKPLOY_COMPOSE_ID; do
+            [ -n "${!v}" ] || { echo "::error::Defina o secret $v."; exit 1; }
+          done
+          curl --fail-with-body --silent --show-error -X POST "${DOKPLOY_URL%/}/api/compose.deploy" \
+            -H "x-api-key: $DOKPLOY_API_KEY" -H 'Content-Type: application/json' \
+            -d "{\"composeId\": \"$DOKPLOY_COMPOSE_ID\"}"
+          echo "Deploy pedido. Acompanhe o build e os logs na aba Deployments do recurso no Dokploy."
