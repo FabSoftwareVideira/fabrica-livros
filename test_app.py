@@ -12,7 +12,7 @@ from unittest import mock
 import zlib
 from pathlib import Path
 
-from acervo import create_app, google_oauth, repository
+from acervo import create_app, google_oauth, repository, services
 from acervo.services import create_user
 
 
@@ -41,6 +41,35 @@ def make_signature_png(width=120, height=40, ink=True, color_type=6):
 TEST_SIGNATURE = make_signature_png()
 
 
+
+class _LoginResponse:
+    status_code = 200
+
+    def __init__(self, data):
+        self._data = data
+
+    def get_json(self):
+        return self._data
+
+
+def sign_in(client, email):
+    """Abre a sessão como o retorno do login com Google (o único login de servidores)."""
+    user = repository.find_user(client.application.config["DATABASE_PATH"], email)
+    assert user and user["is_active"], email
+    with client.application.test_request_context():
+        from flask import session as flask_session
+        from acervo.controllers import start_session
+
+        start_session(user)
+        data = dict(flask_session)
+    with client.session_transaction() as session:
+        session.clear()
+        session.update(data)
+        session.permanent = True
+    return _LoginResponse(
+        {"email": user["email"], "is_admin": bool(user["is_admin"]), "csrf_token": data["csrf_token"]}
+    )
+
 class LibraryAppTest(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -53,7 +82,7 @@ class LibraryAppTest(unittest.TestCase):
                 "SCHOOL_YEAR": 2026,
             }
         )
-        create_user(str(database_path), "servidor@ifc.edu.br", "senha-segura-de-teste", is_admin=True)
+        create_user(str(database_path), "servidor@ifc.edu.br", is_admin=True)
         self.informatics_course_id = next(
             course["id"]
             for course in repository.list_courses(str(database_path))
@@ -74,14 +103,10 @@ class LibraryAppTest(unittest.TestCase):
         """Cliente logado como servidor sem perfil de administrador."""
         database_path = self.app.config["DATABASE_PATH"]
         if not repository.find_user(database_path, "comum@ifc.edu.br"):
-            create_user(database_path, "comum@ifc.edu.br", "senha-servidor-comum")
+            create_user(database_path, "comum@ifc.edu.br")
         client = self.app.test_client()
         csrf = client.get("/api/auth/session").get_json()["csrf_token"]
-        login = client.post(
-            "/api/auth/login",
-            json={"email": "comum@ifc.edu.br", "password": "senha-servidor-comum"},
-            headers={"X-CSRF-Token": csrf},
-        )
+        login = sign_in(client, "comum@ifc.edu.br")
         self.assertEqual(login.status_code, 200)
         return client, login.get_json()["csrf_token"]
 
@@ -91,11 +116,7 @@ class LibraryAppTest(unittest.TestCase):
 
     def login(self):
         token = self.csrf()
-        return self.client.post(
-            "/api/auth/login",
-            json={"email": "servidor@ifc.edu.br", "password": "senha-segura-de-teste"},
-            headers={"X-CSRF-Token": token},
-        )
+        return sign_in(self.client, "servidor@ifc.edu.br")
 
     def student_qr_token(self, enrollment):
         database_path = self.app.config["DATABASE_PATH"]
@@ -103,18 +124,10 @@ class LibraryAppTest(unittest.TestCase):
             create_user(
                 database_path,
                 "fabricio.bizotto@ifc.edu.br",
-                "senha-admin-segura",
             )
         admin = self.app.test_client()
         admin_csrf = admin.get("/api/auth/session").get_json()["csrf_token"]
-        admin_login = admin.post(
-            "/api/auth/login",
-            json={
-                "email": "fabricio.bizotto@ifc.edu.br",
-                "password": "senha-admin-segura",
-            },
-            headers={"X-CSRF-Token": admin_csrf},
-        )
+        admin_login = sign_in(admin, "fabricio.bizotto@ifc.edu.br")
         self.assertEqual(admin_login.status_code, 200)
         admin_csrf = admin_login.get_json()["csrf_token"]
         password = self.student_passwords.get(enrollment)
@@ -157,15 +170,6 @@ class LibraryAppTest(unittest.TestCase):
         self.assertEqual(issued.status_code, 200)
         return issued.get_json()["token"]
 
-    def test_login_requires_ifc_email(self):
-        token = self.csrf()
-        response = self.client.post(
-            "/api/auth/login",
-            json={"email": "outside@example.com", "password": "senha-segura-de-teste"},
-            headers={"X-CSRF-Token": token},
-        )
-        self.assertEqual(response.status_code, 400)
-
     def test_admin_can_advance_school_year_and_setting_persists(self):
         self.login()
         self.client.post(
@@ -184,18 +188,10 @@ class LibraryAppTest(unittest.TestCase):
         create_user(
             self.app.config["DATABASE_PATH"],
             "fabricio.bizotto@ifc.edu.br",
-            "senha-admin-segura",
         )
         admin = self.app.test_client()
         admin_csrf = admin.get("/api/auth/session").get_json()["csrf_token"]
-        logged_in = admin.post(
-            "/api/auth/login",
-            json={
-                "email": "fabricio.bizotto@ifc.edu.br",
-                "password": "senha-admin-segura",
-            },
-            headers={"X-CSRF-Token": admin_csrf},
-        )
+        logged_in = sign_in(admin, "fabricio.bizotto@ifc.edu.br")
         self.assertEqual(logged_in.status_code, 200)
         admin_csrf = logged_in.get_json()["csrf_token"]
         updated = admin.post(
@@ -300,18 +296,10 @@ class LibraryAppTest(unittest.TestCase):
         create_user(
             self.app.config["DATABASE_PATH"],
             "fabricio.bizotto@ifc.edu.br",
-            "senha-admin-segura",
         )
         admin = self.app.test_client()
         csrf = admin.get("/api/auth/session").get_json()["csrf_token"]
-        login = admin.post(
-            "/api/auth/login",
-            json={
-                "email": "fabricio.bizotto@ifc.edu.br",
-                "password": "senha-admin-segura",
-            },
-            headers={"X-CSRF-Token": csrf},
-        )
+        login = sign_in(admin, "fabricio.bizotto@ifc.edu.br")
         self.assertEqual(login.status_code, 200)
         blocked_backup_path = Path(self.temp_dir.name) / "not-a-directory"
         blocked_backup_path.write_text("not a directory", encoding="utf-8")
@@ -333,17 +321,10 @@ class LibraryAppTest(unittest.TestCase):
     def admin_client(self):
         database_path = self.app.config["DATABASE_PATH"]
         if not repository.find_user(database_path, "fabricio.bizotto@ifc.edu.br"):
-            create_user(database_path, "fabricio.bizotto@ifc.edu.br", "senha-admin-segura")
+            create_user(database_path, "fabricio.bizotto@ifc.edu.br")
         admin = self.app.test_client()
         csrf = admin.get("/api/auth/session").get_json()["csrf_token"]
-        login = admin.post(
-            "/api/auth/login",
-            json={
-                "email": "fabricio.bizotto@ifc.edu.br",
-                "password": "senha-admin-segura",
-            },
-            headers={"X-CSRF-Token": csrf},
-        )
+        login = sign_in(admin, "fabricio.bizotto@ifc.edu.br")
         self.assertEqual(login.status_code, 200)
         return admin, login.get_json()["csrf_token"]
 
@@ -877,7 +858,7 @@ class LibraryAppTest(unittest.TestCase):
     def test_google_login_rejects_invalid_callbacks_and_accounts(self):
         self.app.config.update(self.GOOGLE_CONFIG)
         database_path = self.app.config["DATABASE_PATH"]
-        create_user(database_path, "inativo@ifc.edu.br", "senha-inativa-segura")
+        create_user(database_path, "inativo@ifc.edu.br")
         inactive = repository.find_user(database_path, "inativo@ifc.edu.br")
         repository.update_user(database_path, inactive["id"], False, False)
 
@@ -1242,21 +1223,9 @@ class LibraryAppTest(unittest.TestCase):
         create_user(
             database_path,
             "fabricio.bizotto@ifc.edu.br",
-            "senha-admin-segura",
         )
         admin_client = self.app.test_client()
-        login_response = admin_client.post(
-            "/api/auth/login",
-            json={
-                "email": "fabricio.bizotto@ifc.edu.br",
-                "password": "senha-admin-segura",
-            },
-            headers={
-                "X-CSRF-Token": admin_client.get("/api/auth/session").get_json()[
-                    "csrf_token"
-                ]
-            },
-        )
+        login_response = sign_in(admin_client, "fabricio.bizotto@ifc.edu.br")
         self.assertEqual(login_response.status_code, 200)
         self.assertTrue(login_response.get_json()["is_admin"])
         admin_token = login_response.get_json()["csrf_token"]
@@ -1295,14 +1264,7 @@ class LibraryAppTest(unittest.TestCase):
 
         user_client = self.app.test_client()
         user_token = user_client.get("/api/auth/session").get_json()["csrf_token"]
-        user_login = user_client.post(
-            "/api/auth/login",
-            json={
-                "email": "novo.servidor@ifc.edu.br",
-                "password": "senha-servidor-segura",
-            },
-            headers={"X-CSRF-Token": user_token},
-        )
+        user_login = sign_in(user_client, "novo.servidor@ifc.edu.br")
         self.assertTrue(user_login.get_json()["is_admin"])
         admin_token = user_login.get_json()["csrf_token"]
         deactivated = user_client.patch(
@@ -1320,20 +1282,9 @@ class LibraryAppTest(unittest.TestCase):
         )
         self.assertEqual(disabled.status_code, 200)
         self.assertEqual(user_client.get("/api/students").status_code, 401)
-        inactive_client = self.app.test_client()
-        bad_login = inactive_client.post(
-            "/api/auth/login",
-            json={
-                "email": "novo.servidor@ifc.edu.br",
-                "password": "senha-servidor-segura",
-            },
-            headers={
-                "X-CSRF-Token": inactive_client.get("/api/auth/session").get_json()[
-                    "csrf_token"
-                ]
-            },
-        )
-        self.assertEqual(bad_login.status_code, 401)
+        # Conta desativada também não entra pelo Google
+        with self.assertRaises(services.ServiceError):
+            services.google_login(self.app.config["DATABASE_PATH"], "novo.servidor@ifc.edu.br")
 
         self_demote = admin_client.patch(
             f"/api/users/{admin_id}",
@@ -1347,18 +1298,10 @@ class LibraryAppTest(unittest.TestCase):
         create_user(
             database_path,
             "fabricio.bizotto@ifc.edu.br",
-            "senha-admin-segura",
         )
         admin = self.app.test_client()
         admin_csrf = admin.get("/api/auth/session").get_json()["csrf_token"]
-        login_response = admin.post(
-            "/api/auth/login",
-            json={
-                "email": "fabricio.bizotto@ifc.edu.br",
-                "password": "senha-admin-segura",
-            },
-            headers={"X-CSRF-Token": admin_csrf},
-        )
+        login_response = sign_in(admin, "fabricio.bizotto@ifc.edu.br")
         self.assertEqual(login_response.status_code, 200)
         admin_csrf = login_response.get_json()["csrf_token"]
 
@@ -1550,14 +1493,7 @@ class LibraryAppTest(unittest.TestCase):
         )
         client = migrated_app.test_client()
         token = client.get("/api/auth/session").get_json()["csrf_token"]
-        login_response = client.post(
-            "/api/auth/login",
-            json={
-                "email": "fabricio.bizotto@ifc.edu.br",
-                "password": "senha-admin-segura",
-            },
-            headers={"X-CSRF-Token": token},
-        )
+        login_response = sign_in(client, "fabricio.bizotto@ifc.edu.br")
         self.assertEqual(login_response.status_code, 200)
         self.assertTrue(login_response.get_json()["is_admin"])
 
@@ -2020,18 +1956,10 @@ class LibraryAppTest(unittest.TestCase):
         create_user(
             self.app.config["DATABASE_PATH"],
             "fabricio.bizotto@ifc.edu.br",
-            "senha-admin-segura",
         )
         admin = self.app.test_client()
         admin_csrf = admin.get("/api/auth/session").get_json()["csrf_token"]
-        logged_in = admin.post(
-            "/api/auth/login",
-            json={
-                "email": "fabricio.bizotto@ifc.edu.br",
-                "password": "senha-admin-segura",
-            },
-            headers={"X-CSRF-Token": admin_csrf},
-        )
+        logged_in = sign_in(admin, "fabricio.bizotto@ifc.edu.br")
         self.assertEqual(logged_in.status_code, 200)
         admin_csrf = logged_in.get_json()["csrf_token"]
         deleted = admin.delete(
@@ -2231,54 +2159,14 @@ class LibraryAppTest(unittest.TestCase):
         )
         self.assertEqual(historical_enrollment, "historical-student")
 
-    def login_attempt(self, client, password, email="servidor@ifc.edu.br"):
-        token = client.get("/api/auth/session").get_json()["csrf_token"]
-        return client.post(
+    def test_password_login_is_disabled(self):
+        response = self.client.post(
             "/api/auth/login",
-            json={"email": email, "password": password},
-            headers={"X-CSRF-Token": token},
+            json={"email": "servidor@ifc.edu.br", "password": "qualquer-senha-123"},
+            headers={"X-CSRF-Token": self.csrf()},
         )
-
-    def test_login_is_blocked_after_repeated_failures(self):
-        for _ in range(5):
-            self.assertEqual(self.login_attempt(self.client, "senha-errada-123").status_code, 401)
-        blocked = self.login_attempt(self.client, "senha-segura-de-teste")
-        self.assertEqual(blocked.status_code, 429)
-        self.assertIn("Muitas tentativas", blocked.get_json()["error"])
-        other_client = self.app.test_client()
-        self.assertEqual(self.login_attempt(other_client, "senha-segura-de-teste").status_code, 429)
-
-        database_path = self.app.config["DATABASE_PATH"]
-        connection = sqlite3.connect(database_path)
-        try:
-            connection.execute("UPDATE login_failures SET failed_at = failed_at - 16 * 60")
-            connection.commit()
-        finally:
-            connection.close()
-        self.assertEqual(self.login_attempt(self.client, "senha-segura-de-teste").status_code, 200)
-
-    def test_successful_login_resets_failure_count(self):
-        for _ in range(4):
-            self.login_attempt(self.client, "senha-errada-123")
-        self.assertEqual(self.login_attempt(self.client, "senha-segura-de-teste").status_code, 200)
-        other_client = self.app.test_client()
-        for _ in range(4):
-            self.assertEqual(self.login_attempt(other_client, "senha-errada-123").status_code, 401)
-        self.assertEqual(self.login_attempt(other_client, "senha-segura-de-teste").status_code, 200)
-
-    def test_unknown_email_failures_are_also_limited(self):
-        for _ in range(5):
-            response = self.login_attempt(self.client, "qualquer-senha-1", "ninguem@ifc.edu.br")
-            self.assertEqual(response.status_code, 401)
-        response = self.login_attempt(self.client, "qualquer-senha-1", "ninguem@ifc.edu.br")
-        self.assertEqual(response.status_code, 429)
-
-    def test_login_requires_csrf_token(self):
-        response = self.app.test_client().post(
-            "/api/auth/login",
-            json={"email": "servidor@ifc.edu.br", "password": "senha-segura-de-teste"},
-        )
-        self.assertEqual(response.status_code, 403)
+        self.assertIn(response.status_code, (404, 405))
+        self.assertFalse(self.client.get("/api/auth/session").get_json()["authenticated"])
 
     def test_logout_invalidates_copies_of_the_session_cookie(self):
         self.assertEqual(self.login().status_code, 200)
@@ -2319,7 +2207,7 @@ class LibraryAppTest(unittest.TestCase):
 
         login = self.login()
         self.assertEqual(login.status_code, 200)
-        self.assertIn("Expires=", login.headers["Set-Cookie"])
+        self.assertIsNotNone(self.client.get_cookie("session").expires)
         self.assertEqual(self.client.get("/api/students").status_code, 200)
 
     @staticmethod

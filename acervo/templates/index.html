@@ -34,18 +34,11 @@
         <div class="auth-mobile-brand brand-mark"><span class="brand-mark__block">ifc</span><span>fraiburgo</span></div>
         <span class="eyebrow">ÁREA DO SERVIDOR</span>
         <h2 id="auth-title">Boas-vindas</h2>
-        <p class="auth-intro" id="auth-intro">Entre com seu e-mail institucional para continuar.</p>
-        <form id="auth-form" method="post" action="/api/auth/login">
-          <label class="field-label" for="email">E-mail institucional</label>
-          <div class="input-wrap"><span class="input-icon">@</span><input id="email" name="email" type="email" placeholder="nome@ifc.edu.br" autocomplete="username" required></div>
-          <label class="field-label" for="password">Senha</label>
-          <div class="input-wrap"><span class="input-icon input-icon--lock"></span><input id="password" name="password" type="password" placeholder="Sua senha" autocomplete="current-password" required><button class="password-toggle" type="button" data-toggle-password="password" aria-label="Mostrar senha" aria-pressed="false">Mostrar</button></div>
-          <button class="button button--primary button--wide" type="submit" id="auth-submit">Entrar na plataforma <span aria-hidden="true">→</span></button>
-        </form>
-        <div class="auth-divider" id="google-login-divider" hidden><span>ou</span></div>
+        <p class="auth-intro" id="auth-intro">Entre com sua conta Google @ifc.edu.br para continuar.</p>
         <a class="button button--google button--wide" id="google-login-button" href="/api/auth/google/start" hidden>
-          <span class="google-g" aria-hidden="true">G</span> Continuar com Google
+          <span class="google-g" aria-hidden="true">G</span> Entrar com Google
         </a>
+        <p class="auth-switch" id="google-login-unavailable" hidden>O login com Google ainda não foi configurado neste servidor.</p>
         <p class="auth-switch">Primeiro acesso? Solicite uma conta ao administrador do sistema.</p>
         <p class="auth-note"><span class="secure-dot"></span> Acesso exclusivo para servidores do IFC</p>
         <a class="privacy-link" href="{{ url_for('main.privacy_notice') }}" target="_blank" rel="noopener">Aviso de Privacidade</a>
@@ -216,7 +209,6 @@
         <div class="content-card user-management-card">
           <form id="managed-user-form" class="managed-user-form">
             <div><label class="field-label" for="managed-user-email">E-mail institucional</label><input class="text-input" id="managed-user-email" name="email" type="email" placeholder="nome@ifc.edu.br" required></div>
-            <div><label class="field-label" for="managed-user-password">Senha inicial</label><div class="password-field"><input class="text-input" id="managed-user-password" name="password" type="password" minlength="12" maxlength="128" autocomplete="new-password" required><button class="password-toggle password-toggle--field" type="button" data-toggle-password="managed-user-password" aria-label="Mostrar senha" aria-pressed="false">Mostrar</button></div></div>
             <label class="managed-user-admin"><input id="managed-user-admin" name="is_admin" type="checkbox"> Administrador</label>
             <button class="button button--primary" id="managed-user-submit" type="submit">Criar usuário</button>
           </form>

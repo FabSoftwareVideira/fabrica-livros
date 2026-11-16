@@ -4,11 +4,8 @@ export const $$ = (selector, scope = document) => [...scope.querySelectorAll(sel
 export const elements = {
   authScreen: $("#auth-screen"),
   application: $("#application"),
-  authForm: $("#auth-form"),
   authTitle: $("#auth-title"),
   authIntro: $("#auth-intro"),
-  authSubmit: $("#auth-submit"),
-  password: $("#password"),
   studentDialog: $("#student-dialog"),
   studentForm: $("#student-form"),
   detailDialog: $("#student-detail-dialog"),

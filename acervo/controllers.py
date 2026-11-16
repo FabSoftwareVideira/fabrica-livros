@@ -119,30 +119,6 @@ def privacy_notice():
     return render_template("privacy.html")
 
 
-@main.post("/api/auth/login")
-def login():
-    error = csrf_error()
-    if error:
-        return error
-    body = request_body()
-    try:
-        user = services.authenticate(
-            current_app.config["DATABASE_PATH"],
-            body.get("email"),
-            body.get("password"),
-        )
-    except services.ServiceError as error:
-        return handle_service_error(error)
-    start_session(user)
-    return jsonify(
-        {
-            "email": user["email"],
-            "is_admin": bool(user["is_admin"]),
-            "csrf_token": session["csrf_token"],
-        }
-    )
-
-
 @main.get("/api/auth/session")
 def auth_session():
     user, _ = session_user()

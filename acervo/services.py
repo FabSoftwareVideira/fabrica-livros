@@ -10,8 +10,6 @@ import uuid
 import zipfile
 from pathlib import Path
 
-from werkzeug.security import check_password_hash, generate_password_hash
-
 from . import repository, term_pdf
 from .models import GRADES, is_ifc_email, normalize_email, now_iso, validate_signature
 
@@ -31,45 +29,16 @@ def _is_valid_enrollment(enrollment):
     return isinstance(enrollment, str) and re.fullmatch(r"[0-9]{10}", enrollment) is not None
 
 
-def create_user(database_path, email, password, is_admin=False):
+# O acesso é só pelo Google: a conta não tem senha. O "!" no lugar do hash
+# não corresponde a nenhuma senha (a coluna continua NOT NULL por compatibilidade).
+NO_PASSWORD = "!"
+
+
+def create_user(database_path, email, is_admin=False):
     email = normalize_email(email)
     if not is_ifc_email(email):
         raise ValueError("Use um e-mail @ifc.edu.br.")
-    if not isinstance(password, str) or len(password) < 12 or len(password) > 128:
-        raise ValueError("A senha precisa ter entre 12 e 128 caracteres.")
-    repository.add_user(
-        database_path, email, generate_password_hash(password), now_iso(), is_admin
-    )
-
-
-LOGIN_MAX_FAILURES = 5
-LOGIN_FAILURE_WINDOW = 15 * 60
-# Conferido quando o e-mail não existe, para o tempo de resposta não
-# revelar quais contas estão cadastradas.
-_UNKNOWN_USER_HASH = generate_password_hash("conta-inexistente")
-
-
-def authenticate(database_path, email, password, now=None):
-    email = normalize_email(email)
-    if not is_ifc_email(email) or not isinstance(password, str):
-        raise ServiceError("Informe um e-mail @ifc.edu.br e uma senha.", 400)
-    now = time.time() if now is None else now
-    window_start = now - LOGIN_FAILURE_WINDOW
-    # O bloqueio vale por e-mail e é verificado antes da senha, para que
-    # tentativas durante o bloqueio não revelem se a senha estava certa.
-    if repository.count_login_failures(database_path, email, window_start) >= LOGIN_MAX_FAILURES:
-        raise ServiceError(
-            "Muitas tentativas de login. Aguarde 15 minutos e tente novamente.", 429
-        )
-    user = repository.find_user(database_path, email)
-    password_ok = check_password_hash(
-        user["password_hash"] if user else _UNKNOWN_USER_HASH, password
-    )
-    if not user or not user["is_active"] or not password_ok:
-        repository.record_login_failure(database_path, email, now, window_start)
-        raise ServiceError("E-mail ou senha incorretos.", 401)
-    repository.clear_login_failures(database_path, email)
-    return user
+    repository.add_user(database_path, email, NO_PASSWORD, now_iso(), is_admin)
 
 
 def google_login(database_path, email):
@@ -86,16 +55,13 @@ def get_users(database_path):
 
 def create_managed_user(database_path, body):
     email = normalize_email(body.get("email"))
-    password = body.get("password")
     is_admin = body.get("is_admin", False)
     if not isinstance(is_admin, bool):
         raise ServiceError("O perfil de administrador é inválido.", 400)
     if not is_ifc_email(email):
         raise ServiceError("Use um e-mail @ifc.edu.br.", 400)
-    if not isinstance(password, str) or len(password) < 12 or len(password) > 128:
-        raise ServiceError("A senha precisa ter entre 12 e 128 caracteres.", 400)
     try:
-        create_user(database_path, email, password, is_admin)
+        create_user(database_path, email, is_admin)
     except sqlite3.IntegrityError as error:
         if "UNIQUE constraint failed: users.email" in str(error):
             raise ServiceError("Já existe uma conta com esse e-mail.", 409) from error

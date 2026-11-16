@@ -385,7 +385,6 @@ export function bindAdmin() {
         method: "POST",
         body: JSON.stringify({
           email: form.get("email"),
-          password: form.get("password"),
           is_admin: form.get("is_admin") === "on",
         }),
       });

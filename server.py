@@ -1,5 +1,4 @@
 import argparse
-import getpass
 import os
 import sqlite3
 from datetime import datetime
@@ -15,7 +14,10 @@ def main():
         description="Controle de entrega dos livros didáticos do IFC Fraiburgo"
     )
     commands = parser.add_subparsers(dest="command")
-    commands.add_parser("create-user", help="Criar conta de servidor")
+    create_user_command = commands.add_parser(
+        "create-user", help="Cadastrar e-mail de servidor (o acesso é pelo Google)"
+    )
+    create_user_command.add_argument("--admin", action="store_true", help="Conta de administrador")
     commands.add_parser(
         "reset-dev-data",
         help="Apagar estudantes do banco dev, voltar ao ano corrente e inserir dados fictícios",
@@ -24,12 +26,11 @@ def main():
     if args.command == "create-user":
         app = create_app(allow_ephemeral_secret=True)
         email = input("E-mail institucional: ")
-        password = getpass.getpass("Senha (mínimo 12 caracteres): ")
         try:
-            create_user(app.config["DATABASE_PATH"], email, password)
+            create_user(app.config["DATABASE_PATH"], email, args.admin)
         except (ValueError, sqlite3.IntegrityError) as error:
             parser.error(str(error))
-        print("Conta criada.")
+        print("Conta criada. O acesso é pelo login com Google desse e-mail.")
         return
     if args.command == "reset-dev-data":
         if os.environ.get("APP_ENV") != "development":

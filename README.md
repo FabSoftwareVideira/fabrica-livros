@@ -1,198 +1,114 @@
 # Acervo IFC · Campus Fraiburgo
 
-Aplicação de controle da entrega e devolução dos livros didáticos do curso Técnico em Informática Integrado ao Ensino Médio. O termo e as regras foram adaptados do documento `documentos/Termo de compromisso.pdf`.
+Aplicação para controlar a entrega e a devolução de livros didáticos no Ensino Médio Integrado do IFC. O termo de compromisso e as regras foram adaptados do [documento original](documentos/Termo%20de%20compromisso.pdf).
 
-## Organização do projeto
+## Funcionalidades
 
-A aplicação segue o padrão **MVC** (Model–View–Controller), com uma camada de serviço para manter as regras de negócio independentes das rotas e do banco:
+- Cadastro e importação de estudantes, cursos e livros.
+- Registro de entregas e devoluções com assinaturas, histórico e correções.
+- Acompanhamento por ano letivo, turma e curso; exportação dos termos.
+- Administração de usuários, backups e restauração do banco.
+- Acesso de servidores somente pelo login com Google, com contas `@ifc.edu.br` já cadastradas.
 
-```text
-acervo/
-├── controllers.py   # Rotas HTTP, sessão e respostas JSON
-├── models.py        # Catálogo, validações e regras do domínio
-├── repository.py    # Persistência e consultas SQLite
-├── services.py      # Casos de uso e validações do negócio
-├── templates/
-│   └── index.html   # Interface do servidor
-└── static/
-    ├── js/
-    │   ├── main.js            # Inicialização e eventos globais
-    │   ├── state.js, dom.js   # Estado da interface e elementos
-    │   ├── api.js, utils.js   # Cliente HTTP, avisos e utilitários
-    │   ├── auth.js            # Login e sessão
-    │   ├── navigation.js      # Menu, abas e telas
-    │   ├── students.js        # Listagem, filtros, cadastro e importação
-    │   ├── student-detail.js  # Termo do estudante (cadastro ou entrega) e seleção de livros
-    │   ├── loans.js           # Tela Entrega e devolução: busca por matrícula ou nome
-    │   ├── history.js         # Histórico e correções
-    │   ├── signature.js       # Assinatura em canvas
-    │   ├── print.js           # Impressão de termos e backups
-    │   ├── courses.js         # Cursos (opções e filtros)
-    │   └── admin.js           # Cursos, usuários e ano letivo
-    └── styles.css   # Estilos
-server.py            # Inicialização e comando administrativo
-test_app.py          # Testes da aplicação
+## Telas
+
+As imagens usam dados fictícios de demonstração.
+
+**Login**
+
+![Tela de acesso com Google](docs/imagens/login.png)
+
+**Entrega e devolução**
+
+![Busca de estudantes para entrega e devolução](docs/imagens/entrega-devolucao.png)
+
+**Visão geral**
+
+![Indicadores de estudantes e livros](docs/imagens/visao-geral.png)
+
+## Como executar
+
+### Com Docker Compose
+
+Requisitos: Docker Engine e Docker Compose.
+
+```bash
+docker compose -f docker-compose.dev.yml up --build
 ```
 
-As dependências seguem o sentido **Controller → Service → Repository**. A view conversa com os controllers pela API HTTP; assim, interface, regras e persistência podem evoluir separadamente. `create_app()` configura cada instância, o que também permite testar a aplicação com um banco temporário sem tocar nos dados locais.
+Em outro terminal, cadastre o e-mail `@ifc.edu.br` de um servidor (o acesso será pelo Google; use `--admin` para administrador):
 
-## Executar localmente
+```bash
+docker compose -f docker-compose.dev.yml run --rm web python server.py create-user
+```
 
-Requer Python 3.10 ou superior.
+Acesse <http://localhost:5000>. Para encerrar, use `Ctrl+C` e:
 
-```powershell
+```bash
+docker compose -f docker-compose.dev.yml down
+```
+
+O código é montado no container e o Flask recarrega automaticamente por padrão. O banco de desenvolvimento fica em `data-dev/livros.db`, isolado da produção, e persiste após remover os containers.
+
+Para apagar **todos os estudantes do banco de desenvolvimento**, voltar ao ano corrente e carregar três estudantes fictícios, execute o comando abaixo. As contas de servidores são preservadas:
+
+```bash
+docker compose -f docker-compose.dev.yml run --rm web python server.py reset-dev-data
+```
+
+O Compose lê o `.env` na raiz e as variáveis do ambiente, que têm precedência. `PORT` define a porta do Flask e, por padrão, a porta do host (padrão: `5000`); `HOST_PORT` permite usar outra porta no host. Também são aceitas `SECRET_KEY`, `COOKIE_SECURE`, `FLASK_DEBUG`, `SCHOOL_YEAR`, `SESSION_MAX_AGE`, `SESSION_IDLE_TIMEOUT`, `BACKUP_PATH` e as variáveis `GOOGLE_*`. `BACKUP_PATH` é um caminho dentro do container: use `/data` para persistir os backups. A chave padrão é exclusiva para desenvolvimento; para acesso por HTTP, mantenha `COOKIE_SECURE=false`, inclusive se o `.env` de produção usar `true`.
+
+### Com Python
+
+Requer Python 3.10 ou superior:
+
+```bash
 python -m pip install -r requirements.txt
 python server.py create-user
 python server.py
 ```
 
-No primeiro acesso, crie uma conta de servidor pelo comando `create-user`, usando um e-mail `@ifc.edu.br` e uma senha com pelo menos 12 caracteres. A aplicação abre em `http://127.0.0.1:5000`. O banco SQLite `livros.db` é criado localmente e persiste os cadastros e assinaturas.
+Acesse <http://127.0.0.1:5000>. O banco `livros.db` é criado no diretório do projeto. Sem `SECRET_KEY`, o `server.py` gera uma chave temporária e as sessões são encerradas a cada reinício.
 
-Defina `SECRET_KEY` com um segredo aleatório persistente antes de hospedar a aplicação e configure `COOKIE_SECURE=true` quando servida por HTTPS.
+## Uso e administração
 
-### Sessão e login
+- Em **Entrega e devolução**, pesquise um estudante por nome ou matrícula, abra o termo e registre as assinaturas. O histórico permite consultar e cancelar registros com justificativa.
+- Administradores gerenciam estudantes, cursos, livros e contas em **Administração**. A importação de estudantes aceita CSV; use **Baixar modelo CSV** para obter os cabeçalhos e exemplos.
+- Cada ano letivo tem seu próprio termo. O ano inicial usa `SCHOOL_YEAR` ou o ano corrente; após a inicialização, o ano salvo no banco prevalece. Antes de avançar o ano, o sistema cria e valida um backup.
+- A conta `fabricio.bizotto@ifc.edu.br` recebe perfil de administrador ao ser criada. Não há senhas nem cadastro público: um administrador cadastra o e-mail e a pessoa entra com a conta Google desse e-mail.
+- O login com Google é obrigatório: configure `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` e `GOOGLE_REDIRECT_URI`. A URI deve coincidir com a cadastrada no Google e terminar em `/api/auth/google/callback`. Só entram contas Google verificadas do domínio `ifc.edu.br` com cadastro ativo no Acervo.
 
-- Fora do `server.py`, a aplicação não inicia sem `SECRET_KEY`. Localmente, o `server.py` gera uma chave temporária, e as sessões caem a cada reinício.
-- A sessão expira após 12 horas do login (`SESSION_MAX_AGE`) ou 30 minutos sem uso (`SESSION_IDLE_TIMEOUT`). Os dois valores são em segundos.
-- Sair da conta encerra as sessões do usuário em todos os dispositivos. Desativar uma conta também invalida as sessões existentes, mesmo que ela seja reativada depois.
-- Após 5 tentativas de login com erro para o mesmo e-mail, novas tentativas ficam bloqueadas por 15 minutos. Faça cópias de segurança do banco de dados e proteja seu acesso.
+## Produção e dados
 
-## Docker Compose
+O [Compose de produção](docker-compose.yml) usa Gunicorn atrás do Nginx e foi preparado para o Dokploy. Para configurar:
 
-São fornecidas configurações independentes para desenvolvimento e produção. Requer Docker Engine e o plugin Docker Compose.
+1. Crie um recurso Docker Compose no Dokploy apontando para este repositório, branch `main`, arquivo `docker-compose.yml`. Desative o deploy automático do Dokploy.
+2. Na aba **Environment**, configure as variáveis do [.env.example](.env.example). `SECRET_KEY` é obrigatória; gere uma chave persistente com `python -c "import secrets; print(secrets.token_hex(32))"`.
+3. Configure `DATA_DIR` e `BACKUP_DIR` como pastas persistentes fora do repositório. Os padrões são `/srv/fabrica-livros/data` e `/srv/fabrica-livros/backups`. Se já houver um banco, copie-o para `DATA_DIR/livros.db` antes do primeiro deploy.
+4. Em **Domains**, configure o domínio com HTTPS para o serviço `nginx`, porta `80`. Mantenha `COOKIE_SECURE=true`.
+5. Após o deploy, crie a conta inicial no terminal do container `web` com `python server.py create-user --admin` (o e-mail da sua conta Google `@ifc.edu.br`).
 
-### Desenvolvimento
+O [workflow de CI/CD](.github/workflows/ci-cd.yml) executa testes, auditoria de dependências, build e validação dos Compose. Para solicitar o deploy ao Dokploy após aprovação na `main`, configure os secrets `DOKPLOY_URL`, `DOKPLOY_API_KEY` e `DOKPLOY_COMPOSE_ID` no GitHub. Também é possível reimplantar pela opção **Run workflow**.
 
-O modo dev ativa por padrão a recarga automática do Flask, monta o código-fonte no container e usa o banco isolado `data-dev/livros.db` do host. A produção continua usando `data/livros.db`, evitando que testes ou resets de desenvolvimento alterem dados reais. O arquivo e a pasta são criados automaticamente na primeira inicialização; um serviço inicializador prepara permissões para o usuário não-root da aplicação.
+Backups manuais, de restauração e de avanço do ano ficam junto ao banco; o sistema mantém os cinco mais recentes. Em produção, o serviço `backup` cria cópias diárias em `BACKUP_DIR` (por padrão, 14 cópias, às 03:00 de Brasília). É possível restaurar um backup pela aba **Administração → Backup**; para as cópias diárias `.gz`, descompacte antes de enviar.
 
-O Compose lê as variáveis do ambiente ou do arquivo `.env` na raiz (variáveis do ambiente têm precedência). `PORT` define a porta do Flask e, por padrão, a porta publicada no host (padrão: `5000`); `HOST_PORT` pode definir outra porta no host. São aceitas também `SECRET_KEY`, `COOKIE_SECURE`, `FLASK_DEBUG`, `SCHOOL_YEAR`, `SESSION_MAX_AGE`, `SESSION_IDLE_TIMEOUT`, `BACKUP_PATH` e as variáveis `GOOGLE_*`. `BACKUP_PATH`, se definido, é um caminho dentro do container; use um caminho em `/data` para os backups persistirem no host. Por padrão, a chave é apenas para desenvolvimento, o debug fica ativo e `COOKIE_SECURE=false`; para acesso local por HTTP, mantenha o cookie seguro desativado mesmo se o `.env` de produção usar `true`.
+**Proteja os bancos e backups:** eles contêm dados pessoais, assinaturas e hashes de senha de contas antigas. Não os publique e mantenha cópias em outro local protegido. Antes de usar dados reais, o IFC deve validar o aviso de privacidade, definir a base legal e o prazo de retenção e atualizar o canal do encarregado. A validade jurídica das assinaturas também deve ser avaliada institucionalmente.
 
-```powershell
-docker compose -f docker-compose.dev.yml up --build
-```
+## Como contribuir
 
-Acesse `http://localhost:5000`, ou use a porta definida em `HOST_PORT`/`PORT`. Para criar a conta de servidor em outro terminal:
-
-```powershell
-docker compose -f docker-compose.dev.yml run --rm web python server.py create-user
-```
-
-Para limpar somente os estudantes do banco dev, voltar ao ano corrente e carregar três estudantes fictícios de demonstração, execute:
-
-```powershell
-docker compose -f docker-compose.dev.yml run --rm web python server.py reset-dev-data
-```
-
-O comando preserva as contas de servidores, apaga os registros estudantis do banco de desenvolvimento e recria os ciclos para o ano atual. Ele é bloqueado fora do serviço configurado com `APP_ENV=development`. Encerre com `Ctrl+C`; use `docker compose -f docker-compose.dev.yml down` para parar o serviço. Os dados dev ficam em `data-dev\livros.db` e continuam disponíveis depois de remover ou recriar o container.
-
-### Produção com Dokploy
-
-A produção roda na VPS pelo Dokploy, num recurso do tipo **Docker Compose** que usa o `docker-compose.yml`:
-
-- `nginx`: porta de entrada. É o único serviço na rede `dokploy-network`, por onde o Traefik do Dokploy entrega o domínio já com HTTPS. Não há porta publicada no host.
-- `web`: Gunicorn, apenas na rede interna do projeto, com o alias `fabrica-livros-web`. O nome `web` sozinho poderia coincidir com o de outro projeto.
-- `backup`: cópia diária do banco (ver abaixo).
-- `preparar-pastas`: roda a cada deploy e termina. Passa as pastas do host para o usuário do app (UID 10001); o próprio app cria o arquivo do banco ao iniciar.
-
-Cada serviço tem limite de memória, CPU e processos, ajustável pelas variáveis `*_MEMORIA` e `*_CPUS`, para não derrubar os outros projetos da VPS. Os containers rodam sem as capacidades de root que não usam e com `no-new-privileges`, e os logs giram em até 3 arquivos de 10 MB.
-
-**Configuração inicial no Dokploy**
-
-1. Crie um recurso **Docker Compose** apontando para este repositório, branch `main`, arquivo `docker-compose.yml`. Desligue o deploy automático do Dokploy: quem pede o deploy é o GitHub Actions, depois dos testes.
-2. Na aba **Environment**, preencha as variáveis do `.env.example`. A única obrigatória é `SECRET_KEY`:
+1. Abra uma issue para relatar problemas ou propor melhorias.
+2. Crie uma branch a partir de `main` e faça alterações focadas.
+3. Instale as dependências e execute os testes:
 
    ```bash
-   python -c "import secrets; print(secrets.token_hex(32))"
+   python -m pip install -r requirements.txt
+   python -m unittest -v test_app
    ```
 
-3. O banco fica em `DATA_DIR` e os backups diários em `BACKUP_DIR`, pastas fixas da VPS. Os padrões são `/srv/fabrica-livros/data` e `/srv/fabrica-livros/backups`. Elas precisam ficar fora do repositório, porque o Dokploy clona o código de novo a cada deploy. Se já existe um banco, copie-o para `DATA_DIR/livros.db` antes do primeiro deploy (ou aponte `DATA_DIR` para a pasta atual).
-4. Na aba **Domains**, adicione o domínio para o serviço `nginx`, porta `80`, com HTTPS. Mantenha `COOKIE_SECURE=true`.
-5. Faça o primeiro deploy e crie a conta inicial pelo terminal do container `web` no Dokploy:
+4. Abra um pull request descrevendo a alteração e como foi testada. Não inclua dados reais, bancos, backups, senhas ou arquivos `.env`.
 
-   ```bash
-   python server.py create-user
-   ```
+O projeto usa Flask e SQLite, organizado em camadas de controllers, serviços e repositório no diretório [acervo](acervo/).
 
-**Deploy automático (GitHub Actions)**
+## Desenvolvimento
 
-O workflow `.github/workflows/ci-cd.yml` roda em todo push e pull request: testes, auditoria das dependências (`pip-audit`), build da imagem e validação dos dois Compose. Em push na `main` com tudo aprovado, ele pede o deploy ao Dokploy pela API. Para isso, cadastre em **Settings → Secrets and variables → Actions**:
-
-- `DOKPLOY_URL`: endereço do painel, com `https://`.
-- `DOKPLOY_API_KEY`: token gerado no perfil do Dokploy (**Settings → Profile → API/CLI**).
-- `DOKPLOY_COMPOSE_ID`: id do recurso, que aparece na URL dele no painel.
-
-Para reimplantar sem um novo commit, use **Run workflow** na aba Actions.
-
-Antes de cada avanço do ano letivo, a aplicação cria e valida uma cópia completa do banco SQLite antes de alterar os ciclos. O backup fica no diretório `data\backups` em produção (`data-dev\backups` no ambiente de desenvolvimento), dentro do volume persistente `/data`, e também é disponibilizado para download ao administrador após a migração. Em execução local, o diretório padrão é `backups`, ao lado do banco. Esses arquivos contêm dados pessoais, assinaturas e hashes de senha: restrinja o acesso, não os publique e mantenha cópias periódicas em outro local protegido.
-
-Na aba **Administração → Backup**, o administrador pode criar um backup completo a qualquer momento (o arquivo é guardado no mesmo diretório e baixado em seguida), baixar os backups existentes no servidor e restaurar um backup enviando o arquivo SQLite (até 64 MB). Antes de restaurar, a aplicação valida o arquivo e cria um backup de segurança do banco atual; se a troca falhar, o banco anterior é recuperado. Após a restauração, todas as sessões são encerradas e é preciso entrar com uma conta existente no backup. O `nginx/default.conf` aceita uploads maiores apenas nessa rota.
-
-O servidor mantém no máximo os 5 backups mais recentes, contando os manuais, os do avanço do ano letivo e os de segurança da restauração. Ao criar um novo, os mais antigos são apagados automaticamente; guarde fora do servidor as cópias que precisar manter por mais tempo.
-
-Além desses, o serviço `backup` do Compose faz uma cópia diária do banco: uma ao subir e outra por dia às 03:00 de Brasília (`BACKUP_HOUR_UTC=6`). Ele usa a API de backup do SQLite, que gera uma cópia consistente sem parar o app, confere cada cópia com `PRAGMA integrity_check` e guarda o arquivo comprimido em `BACKUP_DIR/livros-AAAA-MM-DD-HHMMSS.db.gz` (data em UTC). Ficam as 14 mais recentes (`BACKUP_KEEP`). Essas cópias ficam fora de `data/backups`, então a limpeza do app não as apaga. Os arquivos são criados só com permissão do dono. Para restaurar, descompacte (`gunzip`) e envie o `.db` pela aba **Administração → Backup**. Para uma cópia na hora, no terminal do container `backup` no Dokploy: `python scripts/backup.py --once`.
-
-Proteja os arquivos de backup e não os inclua no controle de versão. `.gitignore` exclui o banco, seus arquivos auxiliares SQLite e o `.env`.
-
-## Fluxo
-
-- Cadastre cada estudante com nome, matrícula única de exatamente 10 dígitos (por exemplo, `2026304710`), curso e ano (1º, 2º ou 3º). A matrícula pode ser corrigida em **Editar cadastro**, desde que não pertença a outro estudante; entregas, devoluções e histórico acompanham a nova matrícula. Os termos PDF listam os livros em ordem alfabética pelo título.
-- Os cursos **INFO** (Técnico em Informática Integrado ao Ensino Médio) e **ADM** (Técnico em Administração Integrado ao Ensino Médio) são cadastrados inicialmente. Administradores podem adicionar cursos e siglas de 3 a 5 caracteres na seção **Administração → Cursos**, em abas separadas de **Ano letivo** e **Usuários**, e ativar ou desativar cursos. Cursos já vinculados a estudantes não são apagados; ao desativá-los, os vínculos e termos existentes permanecem.
-- Na migração, os estudantes que já estavam cadastrados antes da inclusão dos cursos recebem o vínculo inicial com **INFO — Técnico em Informática Integrado ao Ensino Médio**. O vínculo pode ser ajustado no cadastro de cada estudante. Se já existirem outros cursos sem sigla, o sistema atribui uma sigla provisória, que pode ser usada até 5 caracteres.
-- Em **Administração → Estudantes**, use **Baixar modelo CSV** para obter uma planilha com os cabeçalhos `matricula`, `nome`, `turma` e `curso` e duas linhas de exemplo, uma de cada curso padrão (substitua-as pelos estudantes reais antes de importar); preencha o curso com a sigla ou o nome cadastrado e importe pelo botão **Importar CSV**. A turma pode ser `1`, `1º`, `1°` ou `1º ano` (equivalente para 2º e 3º). Também são aceitos arquivos separados por vírgula ou tabulação e o cabeçalho `matrícula`. Linhas com matrícula já cadastrada, inclusive repetidas no mesmo arquivo, são ignoradas; linhas inválidas são informadas ao final.
-- O cadastro de estudantes fica em **Administração → Estudantes** e é restrito a administradores, inclusive no servidor: cadastrar, importar, editar, desvincular, reativar, excluir e exportar os termos do ano exigem perfil de administrador. Abrir um estudante ali mostra o termo apenas para consulta, com edição, desvinculação e exportação. Qualquer servidor pode consultar estudantes e registrar retiradas e devoluções. Entregas e devoluções ficam na tela **Entrega e devolução**, que é a página inicial e aparece em destaque no menu: pesquise pela matrícula ou pelo nome (sem precisar de acentos) e abra o termo; Enter abre o primeiro resultado. Estudantes com ciclo concluído ou desvinculados também aparecem, para registrar devoluções. No cadastro, **Entrega e devolução** leva o termo aberto para esse fluxo.
-- No termo aberto em **Entrega e devolução**, selecione um ou mais livros pendentes e escolha **Assinar entrega dos selecionados**. Use **Selecionar todos** para marcar de uma vez os livros que ainda podem ser entregues no ciclo atual. A tela de assinatura abre direto, com a lista dos títulos, e a mesma assinatura é registrada em cada livro selecionado. O servidor só aceita a assinatura como imagem PNG íntegra, no formato gerado pelo campo de assinatura, e com algum traço; um campo em branco é recusado. Entregas são registradas apenas por essa seleção de livros do termo; a rota individual por livro aceita somente devoluções.
-- Na tela da assinatura ou ao lado de cada livro, abra **Ver histórico e corrigir registro** / **Histórico** para consultar assinaturas, devoluções e correções anteriores. Se uma entrega ou devolução foi registrada por engano ou a assinatura precisa ser refeita, cancele o registro ativo e informe o motivo. O histórico original não é apagado; cada cancelamento também registra data, servidor responsável e justificativa. Para cancelar uma entrega que já tem devolução registrada, cancele primeiro a devolução.
-- O portal do estudante, a autenticação estudantil e a verificação por QR Code estão desativados. Dados de credenciais antigos, se presentes em um banco existente, são preservados sem uso pela aplicação.
-- Na devolução, o servidor registra a assinatura título por título. A devolução só fica disponível depois da entrega.
-- Estudantes que concluíram o 3º ano ficam arquivados e aparecem em **Administração → Estudantes** pelo filtro **Arquivados**, em vez de aparecerem como estudantes ativos do 3º ano.
-- Use **Exportar PDF** para salvar o termo do ano selecionado. Para exportar juntos todos os termos de um estudante, inclusive os três ciclos de quem concluiu o Ensino Médio, abra o estudante e use **Exportar todos os termos**.
-- Para administradores, o botão **Exportar termos do ano**, no topo da tela, permite selecionar o ano e reúne em um único PDF todos os termos daquele ciclo, incluindo estudantes arquivados que estudaram naquele ano. No diálogo de impressão, selecione **Salvar como PDF**; cada termo começa em uma nova página.
-
-Exemplo de CSV (UTF-8, cabeçalhos na primeira linha):
-
-```csv
-matricula;nome;turma;curso
-2026304710;Ana da Silva;1º;Técnico em Informática Integrado ao Ensino Médio
-2026304711;João Souza;2º ano;Técnico em Administração Integrado ao Ensino Médio
-```
-
-Cada ano letivo tem seu próprio termo. Ao iniciar um novo ano, estudantes ativos são promovidos automaticamente (1º→2º e 2º→3º); quem concluiu o 3º ano fica arquivado, sem novo termo ativo. O ciclo, a turma histórica e a relação de títulos de cada termo ficam preservados, e é possível selecionar anos anteriores no detalhe do estudante e exportar o termo daquele ano em PDF.
-
-Os títulos vêm do catálogo em **Administração → Livros**, onde o administrador cadastra, edita, desativa e exclui livros. Cada livro tem uma aplicação:
-
-- **Ano específico (1º, 2º ou 3º):** entregue a cada ciclo letivo aos estudantes daquele ano (como Português e Matemática).
-- **Volume único:** vale para os três anos. Um empréstimo ainda não devolvido acompanha o estudante nos ciclos seguintes, sem nova assinatura de entrega; títulos já devolvidos não são reemitidos.
-
-O catálogo começa com os 19 títulos usados até então (Português e Matemática para cada ano e 13 volumes únicos). Cadastrar, reativar ou desativar um livro altera os termos do ano letivo atual, sem mexer em livros já entregues nem em ciclos anteriores. Um livro com entregas registradas não pode ser excluído nem mudar de aplicação; desative-o. Os termos já assinados mantêm o título da época da entrega. Ao corrigir a turma no ciclo atual, os livros do novo ano são acrescentados sem apagar assinaturas anteriores. Cada assinatura é registrada com data e hora; a devolução também guarda o e-mail do servidor autenticado.
-
-O ano letivo inicial vem de `SCHOOL_YEAR` (por padrão, o ano corrente) e fica persistido no banco. Um administrador também pode alterá-lo na seção **Usuários → Ano letivo**: antes de avançar, a aplicação cria e valida um backup completo do banco; se essa etapa falhar, o ano não é alterado. Após o avanço, os ciclos e promoções faltantes são criados imediatamente e o backup fica disponível para download. Depois, novos ingressantes podem ser cadastrados/importados como 1º ano. A alteração vale para todos os servidores e persiste após reinícios, prevalecendo sobre uma variável de ambiente anterior. Não é permitido voltar para um ano menor, pois isso poderia reativar termos arquivados ou desfazer promoções; confira o ano antes de confirmar.
-
-## Autenticação e usuários
-
-O acesso usa conta e senha, com senha armazenada em hash e sessão protegida. A conta `fabricio.bizotto@ifc.edu.br` é promovida a administradora na inicialização do banco. Para criá-la no primeiro uso, execute `create-user` e informe esse e-mail; a senha não é criada automaticamente:
-
-```powershell
-docker compose run --rm web python server.py create-user
-```
-
-Administradores veem a seção **Administração**, organizada nas abas **Cursos**, **Ano letivo** e **Usuários**. Podem cadastrar contas `@ifc.edu.br`, promover servidores a administradores e ativar/desativar contas. O menu lateral pode ser recolhido pelo botão no topo da página. Contas desativadas não podem entrar e sessões já abertas perdem o acesso na próxima requisição. O sistema impede que o administrador remova o próprio acesso pela interface ou que a última conta administradora ativa seja desativada/rebaixada. Não há cadastro público nem recuperação de senha implementados.
-
-O login com e-mail e senha continua disponível. O **login com Google** é opcional e só aparece quando `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` e `GOOGLE_REDIRECT_URI` estão configurados (veja `.env.example`). Para ativá-lo:
-
-1. No Google Cloud Console, crie um cliente OAuth do tipo **Aplicativo da Web** e cadastre como URI de redirecionamento autorizada o endereço público seguido de `/api/auth/google/callback` (por exemplo, `https://acervo.exemplo.ifc.edu.br/api/auth/google/callback`). A tela de consentimento pode ser do tipo **Interno**, restrita à organização.
-2. Preencha as três variáveis no `.env`; `GOOGLE_REDIRECT_URI` deve ser idêntica à cadastrada.
-3. Reinicie a aplicação.
-
-O Google não cria contas: entra apenas quem já tem conta **ativa** no Acervo com o mesmo e-mail, que precisa ser `@ifc.edu.br` e verificado pelo Google. Perfil (servidor ou administrador), desativação e encerramento de sessões seguem as mesmas regras do login com senha. O fluxo usa `state`, `nonce` e PKCE, e o servidor confere emissor, público, validade e domínio do ID token. Não publique este servidor diretamente na internet sem configurar esses controles e uma política de backup.
-
-As assinaturas manuscritas são armazenadas como imagens junto às datas e ao registro do servidor. O QR autentica a sessão do estudante, mas não substitui a avaliação institucional sobre validade jurídica e requisitos de assinatura eletrônica. Validade jurídica e uso de credenciais por estudantes menores de idade devem ser avaliados pelo IFC antes do uso oficial.
-
-## Privacidade
-
-O aviso de privacidade está disponível publicamente em `/privacidade` e pelo link na tela de acesso e no rodapé da aplicação. Ele descreve os dados arquivados para controle interno, quem pode acessá-los, o contexto de estudantes adolescentes, serviços técnicos envolvidos e direitos dos titulares. Antes de usar dados reais em produção, o IFC deve validar o texto, definir e registrar a base legal e o prazo de retenção e inserir o canal institucional atualizado do encarregado de dados pessoais.
-
-## Verificações
-
-```powershell
-python -m unittest
-```
+Desenvolvido pela [Fábrica de Software do IFC Campus Videira](http://fabrica.videira.ifc.edu.br/). Consulte também os [contribuidores do projeto](https://github.com/FabSoftwareVideira/fabrica-livros/graphs/contributors).
