@@ -63,13 +63,15 @@ São fornecidas configurações independentes para desenvolvimento e produção.
 
 ### Desenvolvimento
 
-O modo dev ativa a recarga automática do Flask, monta o código-fonte no container e usa o banco isolado `data-dev/livros.db` do host. A produção continua usando `data/livros.db`, evitando que testes ou resets de desenvolvimento alterem dados reais. O arquivo e a pasta são criados automaticamente na primeira inicialização; um serviço inicializador prepara permissões para o usuário não-root da aplicação. O cookie HTTPS é desativado somente para uso local.
+O modo dev ativa por padrão a recarga automática do Flask, monta o código-fonte no container e usa o banco isolado `data-dev/livros.db` do host. A produção continua usando `data/livros.db`, evitando que testes ou resets de desenvolvimento alterem dados reais. O arquivo e a pasta são criados automaticamente na primeira inicialização; um serviço inicializador prepara permissões para o usuário não-root da aplicação.
+
+O Compose lê as variáveis do ambiente ou do arquivo `.env` na raiz (variáveis do ambiente têm precedência). `PORT` define a porta do Flask e, por padrão, a porta publicada no host (padrão: `5000`); `HOST_PORT` pode definir outra porta no host. São aceitas também `SECRET_KEY`, `COOKIE_SECURE`, `FLASK_DEBUG`, `SCHOOL_YEAR`, `SESSION_MAX_AGE`, `SESSION_IDLE_TIMEOUT`, `BACKUP_PATH` e as variáveis `GOOGLE_*`. `BACKUP_PATH`, se definido, é um caminho dentro do container; use um caminho em `/data` para os backups persistirem no host. Por padrão, a chave é apenas para desenvolvimento, o debug fica ativo e `COOKIE_SECURE=false`; para acesso local por HTTP, mantenha o cookie seguro desativado mesmo se o `.env` de produção usar `true`.
 
 ```powershell
 docker compose -f docker-compose.dev.yml up --build
 ```
 
-Acesse `http://localhost:5000`. Para criar a conta de servidor em outro terminal:
+Acesse `http://localhost:5000`, ou use a porta definida em `HOST_PORT`/`PORT`. Para criar a conta de servidor em outro terminal:
 
 ```powershell
 docker compose -f docker-compose.dev.yml run --rm web python server.py create-user
